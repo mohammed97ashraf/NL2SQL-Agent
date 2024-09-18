@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat with SQL Agent</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.3/css/bulma.min.css">
+    <style>
+        .chat-container {
+            height: 500px;
+            overflow-y: scroll;
+            padding: 1rem;
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+        .message {
+            margin-bottom: 1rem;
+            padding: 0.75rem;
+            border-radius: 5px;
+        }
+        .user-message {
+            background-color: #ffd966;
+            text-align: right;
+        }
+        .agent-message {
+            background-color: #d9f7be;
+        }
+        .chart-container, .table-container {
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        #voiceButton.recording {
+            background-color: red;
+        }
+        .is-hidden {
+            display: none;
+        }
+        .modal-close {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            font-size: 1.5rem;
+            color: #fff;
+            cursor: pointer;
+        }
+        .loader-container {
+            display: none;
+            justify-content: center;
+            align-items: center;
+            height: 50px;
+        }
+        .loader {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <section class="section">
+        <div class="container">
+            <h1 class="title">Chat with Your SQL Agent</h1>
+            <div id="chat-container" class="chat-container"></div>
+
+            <!-- Loader -->
+            <div id="loader-container" class="loader-container">
+                <div class="loader"></div>
+            </div>
+
+            <div class="field is-grouped mt-3">
+                <p class="control is-expanded">
+                    <input class="input" type="text" placeholder="Type a message..." id="userInput" onkeydown="checkEnter(event)">
+                </p>
+                <p class="control">
+                    <button class="button is-link" onclick="sendUserMessage()">Send</button>
+                </p>
+                <p class="control">
+                    <button id="voiceButton" class="button is-info" aria-label="Start Voice Recording" onclick="toggleVoiceRecording()">🎤</button>
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Modal for Full-Screen Chart -->
+    <div id="chartModal" class="modal">
+        <div class="modal-background"></div>
+        <div class="modal-content">
+            <canvas id="fullScreenChart"></canvas>
+        </div>
+        <button class="modal-close" aria-label="Close"></button>
+    </div>
+
+    <!-- Modal for Full-Screen Table -->
+    <div id="tableModal" class="modal">
+        <div class="modal-background"></div>
+        <div class="modal-content">
+            <div id="fullScreenTable"></div>
+        </div>
+        <button class="modal-close" aria-label="Close"></button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+
+        function toggleVoiceRecording() {
+            const voiceButton = document.getElementById('voiceButton');
+            
+            if (!isRecording) {
+                startRecording();
+                voiceButton.classList.add('recording');
+                voiceButton.setAttribute('aria-label', 'Stop Voice Recording');
+                voiceButton.textContent = 'Stop 🎤';
+            } else {
+                stopRecording();
+                voiceButton.classList.remove('recording');
+                voiceButton.setAttribute('aria-label', 'Start Voice Recording');
+                voiceButton.textContent = 'Start 🎤';
+            }
+        }
+
+        function startRecording() {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.start();
+                    isRecording = true;
+
+                    mediaRecorder.addEventListener("dataavailable", event => {
+                        audioChunks.push(event.data);
+                    });
+
+                    mediaRecorder.addEventListener("stop", () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/mpeg' });
+                        sendVoiceMessage(audioBlob);
+                        audioChunks = [];
+                    });
+                });
+        }
+
+        function stopRecording() {
+            mediaRecorder.stop();
+            isRecording = false;
+        }
+
+        function sendVoiceMessage(audioBlob) {
+            const formData = new FormData();
+            formData.append('input_type', 'voice');
+            formData.append('voice_data', audioBlob, 'recording.mp3');
+            
+            // Show loader
+            document.getElementById('loader-container').style.display = 'flex';
+
+            fetch('/agent', {
+                method: 'POST',
+                body: formData
+            }).then(response => response.json())
+              .then(data => {
+                fetchAgentResponse(data);
+              })
+              .finally(() => {
+                // Hide loader
+                document.getElementById('loader-container').style.display = 'none';
+              });
+        }
+
+        function sendUserMessage() {
+            const userInput = document.getElementById('userInput');
+            const message = userInput.value.trim();
+
+            if (message !== "") {
+                const chatContainer = document.getElementById('chat-container');
+
+                // Create a div for the user message
+                const userMessageDiv = document.createElement('div');
+                userMessageDiv.classList.add('message', 'user-message');
+                userMessageDiv.textContent = "You: " + message;
+
+                // Append the user message to the chat container
+                chatContainer.appendChild(userMessageDiv);
+
+                // Clear input field
+                userInput.value = '';
+
+                // Show loader
+                document.getElementById('loader-container').style.display = 'flex';
+
+                // Simulate agent response
+                fetch('/agent', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        input_type: 'text',
+                        data: message
+                    })
+                }).then(response => response.json())
+                  .then(data => {
+                    fetchAgentResponse(data);
+                  })
+                  .finally(() => {
+                    // Hide loader
+                    document.getElementById('loader-container').style.display = 'none';
+                  });
+
+                // Auto-scroll to the bottom of the chat
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        }
+
+        function checkEnter(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                sendUserMessage();
+            }
+        }
+
+        async function fetchAgentResponse(data) {
+            const chatContainer = document.getElementById('chat-container');
+
+            try {
+                // Create a div for the message/chart/table
+                const messageDiv = document.createElement('div');
+                messageDiv.classList.add('message', 'agent-message');
+
+                if (data.format === 'message') {
+                    // Display text message
+                    messageDiv.textContent = "Agent: " + data.content;
+                } else if (data.format === 'chart') {
+                    // Create canvas for inline chart
+                    const chartCanvas = document.createElement('canvas');
+                    chartCanvas.id = 'inlineChart';
+                    messageDiv.appendChild(chartCanvas);
+
+                    // Wrap the canvas in a container with limited height
+                    const chartContainer = document.createElement('div');
+                    chartContainer.classList.add('chart-container');
+                    chartContainer.appendChild(chartCanvas);
+                    messageDiv.appendChild(chartContainer);
+
+                    // Render chart inline in chat window
+                    const ctx = chartCanvas.getContext('2d');
+                    new Chart(ctx, {
+                        type: data.chart_type,
+                        data: {
+                            labels: data.labels,
+                            datasets: [{
+                                label: 'Dataset 1',
+                                data: data.data,
+                                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                                borderColor: 'rgba(75, 192, 192, 1)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                y: {
+                                    beginAtZero: true
+                                }
+                            },
+                            plugins: {
+                                title: {
+                                    display: true,
+                                    text: data.chart_title
+                                }
+                            }
+                        }
+                    });
+
+                    // Add "View in Full Screen" button for charts
+                    const viewChartButton = document.createElement('button');
+                    viewChartButton.classList.add('button', 'is-link', 'view-chart-button');
+                    viewChartButton.textContent = 'View in Full Screen';
+                    viewChartButton.addEventListener('click', function() {
+                        openFullScreenChart(data);
+                    });
+                    messageDiv.appendChild(viewChartButton);
+
+                } else if (data.format === 'table') {
+                    // Create table element
+                    const tableContainer = document.createElement('div');
+                    tableContainer.classList.add('table-container');
+                    const table = document.createElement('table');
+
+                    // Create table headers
+                    const thead = document.createElement('thead');
+                    const headerRow = document.createElement('tr');
+                    data.headers.forEach(header => {
+                        const th = document.createElement('th');
+                        th.textContent = header;
+                        headerRow.appendChild(th);
+                    });
+                    thead.appendChild(headerRow);
+                    table.appendChild(thead);
+
+                    // Create table body
+                    const tbody = document.createElement('tbody');
+                    data.rows.forEach(row => {
+                        const tr = document.createElement('tr');
+                        row.forEach(cell => {
+                            const td = document.createElement('td');
+                            td.textContent = cell;
+                            tr.appendChild(td);
+                        });
+                        tbody.appendChild(tr);
+                    });
+                    table.appendChild(tbody);
+
+                    tableContainer.appendChild(table);
+                    messageDiv.appendChild(tableContainer);
+
+                    // Add "View Full Table" button
+                    const viewTableButton = document.createElement('button');
+                    viewTableButton.classList.add('button', 'is-link', 'view-table-button');
+                    viewTableButton.textContent = 'View Full Table';
+                    viewTableButton.addEventListener('click', function() {
+                        openFullScreenTable(data);
+                    });
+                    messageDiv.appendChild(viewTableButton);
+                }
+
+                // Append the new message to the chat container
+                chatContainer.appendChild(messageDiv);
+
+                // Auto-scroll to the bottom of the chat
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            } catch (error) {
+                console.error('Error fetching agent response:', error);
+            }
+        }
+
+        // Full-Screen Chart Modal
+        function openFullScreenChart(data) {
+            const modal = document.getElementById('chartModal');
+            const fullScreenChart = document.getElementById('fullScreenChart').getContext('2d');
+
+            // Open modal
+            modal.classList.add('is-active');
+
+            // Render the full-screen chart with dynamic type and title
+            new Chart(fullScreenChart, {
+                type: data.chart_type,
+                data: {
+                    labels: data.labels,
+                    datasets: [{
+                        label: 'Dataset 1',
+                        data: data.data,
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: data.chart_title
+                        }
+                    }
+                }
+            });
+
+            // Close modal on click
+            document.querySelector('#chartModal .modal-close').addEventListener('click', function() {
+                modal.classList.remove('is-active');
+            });
+
+            // Close modal when clicking on the background
+            document.querySelector('#chartModal .modal-background').addEventListener('click', function() {
+                modal.classList.remove('is-active');
+            });
+        }
+
+        // Full-Screen Table Modal
+        function openFullScreenTable(data) {
+            const modal = document.getElementById('tableModal');
+            const fullScreenTable = document.getElementById('fullScreenTable');
+
+            // Clear previous table
+            fullScreenTable.innerHTML = '';
+
+            // Open modal
+            modal.classList.add('is-active');
+
+            // Render the full-screen table
+            const table = document.createElement('table');
+            table.classList.add('table', 'is-striped', 'is-fullwidth');
+
+            // Create table headers
+            const thead = document.createElement('thead');
+            const headerRow = document.createElement('tr');
+            data.headers.forEach(header => {
+                const th = document.createElement('th');
+                th.textContent = header;
+                headerRow.appendChild(th);
+            });
+            thead.appendChild(headerRow);
+            table.appendChild(thead);
+
+            // Create table body
+            const tbody = document.createElement('tbody');
+            data.rows.forEach(row => {
+                const tr = document.createElement('tr');
+                row.forEach(cell => {
+                    const td = document.createElement('td');
+                    td.textContent = cell;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+
+            fullScreenTable.appendChild(table);
+
+            // Close modal on click
+            document.querySelector('#tableModal .modal-close').addEventListener('click', function() {
+                modal.classList.remove('is-active');
+            });
+
+            // Close modal when clicking on the background
+            document.querySelector('#tableModal .modal-background').addEventListener('click', function() {
+                modal.classList.remove('is-active');
+            });
+        }
+    </script>
+</body>
+</html>
